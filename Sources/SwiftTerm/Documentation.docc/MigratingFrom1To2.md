@@ -300,9 +300,19 @@ callbacks must run on the main queue.
 
 The existing `TerminalView.setMarkedText(_:selectedRange:)` and `unmarkText()`
 methods are open on UIKit, matching the subclass access of their AppKit
-counterparts. A host can invalidate its own speculative presentation when
-composition begins or ends. Call `super` to preserve UIKit preedit, normalization,
-and committed-input delivery; proposed marked text is not terminal input.
+counterparts. With the already open `insertText(_:)` and `deleteBackward()`, a
+host can invalidate its own speculative presentation when composition changes.
+
+`setMarkedText(_:selectedRange:)` sees composition begin and change. Composition
+can end without a call to either newly open method: `insertText(_:)` commits
+and clears the marked range, for example when the user picks a candidate, and
+`deleteBackward()` clears it. `unmarkText()` commits by calling `insertText(_:)`,
+so an `insertText(_:)` override also sees that commit, with `markedTextRange`
+still set. Read `markedTextRange` in `insertText(_:)` and `deleteBackward()`
+before calling `super` to tell a composition commit from ordinary input.
+
+Call `super` to preserve UIKit preedit, normalization, and committed-input
+delivery; proposed marked text is not terminal input.
 
 ## Verify the migration
 

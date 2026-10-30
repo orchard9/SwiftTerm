@@ -123,6 +123,8 @@ public struct TerminalContentRowSnapshot: Sendable, Equatable {
     public let isWrapped: Bool
     /// False for double-width and either half of a double-height line.
     public let isSingleWidth: Bool
+    /// Presentation state belongs to this paragraph, not the terminal's current modes.
+    public let bidiState: BidiPresentationState
     public let cells: [TerminalCellSnapshot]
     /// Right-trimmed display text without internal NUL placeholders.
     ///
@@ -133,10 +135,11 @@ public struct TerminalContentRowSnapshot: Sendable, Equatable {
     }
 
     public init(absoluteRow: Int, cells: [TerminalCellSnapshot], isSingleWidth: Bool,
-                isWrapped: Bool = false) {
+                bidiState: BidiPresentationState, isWrapped: Bool = false) {
         self.absoluteRow = absoluteRow
         self.isWrapped = isWrapped
         self.isSingleWidth = isSingleWidth
+        self.bidiState = bidiState
         self.cells = cells
     }
 }
@@ -267,6 +270,7 @@ extension Terminal {
                 absoluteRow: source.linesTop + index,
                 cells: cells,
                 isSingleWidth: line.renderMode == .single,
+                bidiState: line.bidiState,
                 isWrapped: line.isWrapped)
         }
         return TerminalContentSnapshot(

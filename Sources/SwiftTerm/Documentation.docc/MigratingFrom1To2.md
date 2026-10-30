@@ -153,6 +153,11 @@ pending wrap. Each row's `isSingleWidth` is false for double-width lines and bot
 halves of double-height lines; it describes the line's render mode, not its
 individual cell widths.
 
+Each row also copies its paragraph's `bidiState`. A mid-paragraph mode change
+does not replace that state: soft-wrapped continuations inherit it, while a new
+hard-line paragraph uses the current terminal modes. Do not substitute global
+BiDi settings or assume logical cell order is the rendered order.
+
 Synchronized output does not prevent a content copy: the copied state can
 describe an intermediate frame while `synchronizedOutputActive` is true. This
 is inspection, not a display-commit or remote-input acknowledgement.
@@ -160,8 +165,8 @@ is inspection, not a display-commit or remote-input acknowledgement.
 phase and whether the cursor lies in the displayed viewport.
 
 Public construction now requires an explicit `layout` for a content snapshot
-and `isSingleWidth` for each row. Supply the actual geometry and policy rather
-than assuming full-screen margins or a single-width render mode.
+and `isSingleWidth` plus `bidiState` for each row. Supply the actual geometry and
+paragraph policy rather than assuming full-screen margins or left-to-right order.
 
 ``TerminalTextMetrics/simpleGraphemeWidth(_:)`` reuses the emulator's Unicode
 width policy and returns 1 or 2 for an eligible standalone base with only safe,

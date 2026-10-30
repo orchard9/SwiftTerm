@@ -351,6 +351,28 @@ struct TerminalContentSnapshotCoreTests {
         #expect(bounded.capturedRange.lowerBound > 0)
     }
 
+    @Test func copiedParagraphOrderSurvivesGlobalModeChangesAndSoftWrap() throws {
+        let fixture = Fixture()
+        fixture.feed("\u{1b}[?2501l\u{1b}[2 kABCDEFGHIJKL")
+        let before = fixture.terminal.contentSnapshot(region: .viewport)
+        #expect(before.rows[0].bidiState.presentationMode == .implicitRightToLeft)
+
+        // A mid-paragraph mode change affects future paragraphs, not this one.
+        fixture.feed("\u{1b}[8l\u{1b}[1 kM")
+        let wrapped = fixture.terminal.contentSnapshot(region: .viewport)
+        #expect(fixture.terminal.currentBidiState.presentationMode == .explicitLeftToRight)
+        #expect(wrapped.rows[0].bidiState == before.rows[0].bidiState)
+        #expect(wrapped.rows[1].isWrapped)
+        #expect(wrapped.rows[1].bidiState == before.rows[0].bidiState)
+
+        fixture.feed("\r\nnew")
+        let next = fixture.terminal.contentSnapshot(region: .viewport)
+        #expect(next.rows[2].bidiState.presentationMode == .explicitLeftToRight)
+        #expect(!next.rows[2].isWrapped)
+        #expect(before.rows[0].bidiState.presentationMode == .implicitRightToLeft)
+        #expect(before.rows[1].text.isEmpty)
+    }
+
     @Test func valueTypesAreCheckedSendable() {
         func requireSendable<T: Sendable>(_: T.Type) {}
         requireSendable(TerminalDimensions.self)

@@ -30,6 +30,7 @@ struct TerminalContentSnapshotPublicAPITests {
             absoluteRow: 7,
             cells: [cell],
             isSingleWidth: true,
+            bidiState: BidiPresentationState(),
             isWrapped: true)
         let snapshot = TerminalContentSnapshot(
             inputState: input,
@@ -57,6 +58,7 @@ struct TerminalContentSnapshotPublicAPITests {
                 TerminalCellSnapshot(text: "\u{0}", width: 1, attribute: .empty),
             ],
             isSingleWidth: true,
+            bidiState: BidiPresentationState(),
             isWrapped: false)
 
         #expect(row.text == "界 x  ")
@@ -69,7 +71,8 @@ struct TerminalContentSnapshotPublicAPITests {
             cells: [
                 TerminalCellSnapshot(text: "a", width: Int.max, attribute: .empty),
             ],
-            isSingleWidth: true)
+            isSingleWidth: true,
+            bidiState: BidiPresentationState())
 
         #expect(row.text == "a")
     }

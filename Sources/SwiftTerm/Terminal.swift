@@ -2658,14 +2658,32 @@ open class Terminal {
             // marked as continuations; a surviving flag makes the next widening
             // reflow join those unrelated lines onto the ones above them. The
             // scrolling branch above needs nothing: it brings in an unwrapped row.
-            let line = buffer.lines[buffer.yBase + buffer.y]
+            let row = buffer.yBase + buffer.y
+            let line = buffer.lines[row]
             if line.isWrapped {
                 // Splitting a wrapped paragraph can change letter shapes
                 // on both sides. Request a redraw for both paragraphs.
                 line.isWrapped = false
                 updateRange(borrowing: buffer, startLine: by, endLine: buffer.y)
             }
+            // The entered row now starts a paragraph with the current modes.
+            // Rows that still soft-wrap from it belong to that paragraph, so
+            // they take the same state, as reflow keeps it.
             line.bidiState = _currentBidiState
+            var next = row + 1
+            var lastChanged: Int? = nil
+            while next < buffer.lines.count && buffer.lines[next].isWrapped {
+                let continuation = buffer.lines[next]
+                if continuation.bidiState != _currentBidiState {
+                    continuation.bidiState = _currentBidiState
+                    lastChanged = next
+                }
+                next += 1
+            }
+            if let lastChanged {
+                updateRange(borrowing: buffer, startLine: buffer.y + 1,
+                            endLine: lastChanged - buffer.yBase)
+            }
         }
         
         // If the end of the line is hit, prevent this action from wrapping around to the next line.

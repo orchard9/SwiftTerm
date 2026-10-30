@@ -123,7 +123,9 @@ public struct TerminalContentRowSnapshot: Sendable, Equatable {
     public let isWrapped: Bool
     /// False for double-width and either half of a double-height line.
     public let isSingleWidth: Bool
-    /// Presentation state belongs to this paragraph, not the terminal's current modes.
+    /// Presentation state of the paragraph that contains this row, not the
+    /// terminal's current modes. Every row of a soft-wrapped run carries the
+    /// state of the run's first row.
     public let bidiState: BidiPresentationState
     public let cells: [TerminalCellSnapshot]
     /// Right-trimmed display text without internal NUL placeholders.

@@ -373,6 +373,35 @@ struct TerminalContentSnapshotCoreTests {
         #expect(before.rows[1].text.isEmpty)
     }
 
+    @Test func lineFeedIntoWrappedRowGivesItsContinuationsTheNewParagraphState() throws {
+        let fixture = Fixture()
+        fixture.feed("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        // The cursor is mid-paragraph, so the mode change leaves every row as is.
+        fixture.feed("\u{1b}[?2501l\u{1b}[2 k")
+        let before = fixture.terminal.contentSnapshot(region: .viewport)
+        let original = before.rows[0].bidiState
+        #expect(original.presentationMode == .implicitAutoLeftToRight)
+        #expect(before.rows[1].isWrapped)
+        #expect(before.rows[2].isWrapped)
+        #expect(before.rows[2].bidiState == original)
+
+        // A line feed into row 1 ends row 0's paragraph and starts a new one
+        // that still soft-wraps onto row 2.
+        fixture.feed("\u{1b}[1;1H\n")
+        let after = fixture.terminal.contentSnapshot(region: .viewport)
+        #expect(after.rows[1].text == "MNOPQRSTUVWX")
+        #expect(!after.rows[1].isWrapped)
+        #expect(after.rows[1].bidiState.presentationMode == .implicitRightToLeft)
+        #expect(after.rows[2].text == "YZ")
+        #expect(after.rows[2].isWrapped)
+        #expect(after.rows[2].bidiState == after.rows[1].bidiState)
+
+        // The paragraph above and the next hard line keep their own state.
+        #expect(after.rows[0].bidiState == original)
+        #expect(!after.rows[3].isWrapped)
+        #expect(after.rows[3].bidiState == original)
+    }
+
     @Test func valueTypesAreCheckedSendable() {
         func requireSendable<T: Sendable>(_: T.Type) {}
         requireSendable(TerminalDimensions.self)

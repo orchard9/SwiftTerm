@@ -84,5 +84,60 @@ struct UserInputRoutingTests {
         #expect(delegate.sent == [[0x0d]])
         #expect(view.withTerminal { $0.buffer.semanticInput } == .submitted)
     }
+
+    /// A view in a borderless window so AppKit events carry usable locations.
+    private func makeWindowedView() -> (ReplyRecordingTerminalView, InputCapturingDelegate, NSWindow) {
+        let (view, delegate) = makeView()
+        let window = NSWindow(contentRect: view.frame, styleMask: .borderless,
+                              backing: .buffered, defer: false)
+        window.contentView = view
+        return (view, delegate, window)
+    }
+
+    private func leftClick(on view: TerminalView, in window: NSWindow,
+                           col: Int) -> (down: NSEvent, up: NSEvent) {
+        let point = CGPoint(x: (CGFloat(col) + 0.5) * view.cellDimension.width,
+                            y: view.frame.height - 0.5 * view.cellDimension.height)
+        let down = NSEvent.mouseEvent(with: .leftMouseDown, location: point,
+                                      modifierFlags: [], timestamp: 0,
+                                      windowNumber: window.windowNumber, context: nil,
+                                      eventNumber: 1, clickCount: 1, pressure: 1)!
+        let up = NSEvent.mouseEvent(with: .leftMouseUp, location: point,
+                                    modifierFlags: [], timestamp: 0,
+                                    windowNumber: window.windowNumber, context: nil,
+                                    eventNumber: 2, clickCount: 1, pressure: 0)!
+        return (down, up)
+    }
+
+    @Test func mouseReportsTakeTheInputPathAndQueryRepliesDoNot() {
+        let (view, delegate, window) = makeWindowedView()
+        view.feed(text: "\(esc)[?1000h\(esc)[?1006h")
+        let click = leftClick(on: view, in: window, col: 1)
+
+        view.mouseDown(with: click.down)
+        view.mouseUp(with: click.up)
+
+        #expect(delegate.sent == [Array("\(esc)[<0;2;1M".utf8), Array("\(esc)[<0;2;1m".utf8)])
+        #expect(view.recordedReplies.isEmpty)
+
+        // A status report is the terminal's own reply, not user input.
+        view.feed(text: "\(esc)[5n")
+        #expect(view.recordedReplies == [Array("\(esc)[0n".utf8)])
+        #expect(delegate.sent.count == 2)
+    }
+
+    @Test func semanticPromptClickTakesTheInputPath() {
+        let (view, delegate, window) = makeWindowedView()
+        view.feed(text: "\(esc)]133;A;click_events=1\u{07}>\(esc)]133;B\u{07}hi")
+        let click = leftClick(on: view, in: window, col: 1)
+
+        view.mouseDown(with: click.down)
+        view.mouseUp(with: click.up)
+
+        #expect(delegate.sent == [Array("\(esc)[<0;2;1M".utf8)])
+        #expect(view.recordedReplies.isEmpty)
+        // Like a mouse report, the click is not a submission.
+        #expect(view.withTerminal { $0.buffer.semanticInput } == .armed)
+    }
 }
 #endif

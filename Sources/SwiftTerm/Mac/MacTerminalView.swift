@@ -1515,6 +1515,13 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
         eventQueue.post(.bufferActivated)
     }
     
+    /// Receives the bytes the ``Terminal`` produces itself - replies to the
+    /// application's queries and reports such as focus changes - and forwards
+    /// them to ``TerminalViewDelegate/send(source:data:)`` on the main actor.
+    /// User input the view encodes (typing, text paste, mouse reports and
+    /// semantic prompt clicks) goes to that delegate method directly and never
+    /// passes through here, so a subclass can route replies separately by
+    /// overriding this method.
     nonisolated open func send(source: Terminal, data: ArraySlice<UInt8>) {
         let capturedData = Array(data)
         onMain { [weak self] in
@@ -3651,13 +3658,14 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
     
     private func sharedMouseEvent (with event: NSEvent)
     {
-        withTerminal { terminal in
+        let report = withTerminal { terminal -> [UInt8] in
             let displayBuffer = terminal.displayBuffer
             let hit = calculateMouseHitLocked(at: convert(event.locationInWindow, from: nil))
             let buttonFlags = encodeMouseEventLocked(with: event)
             let screenRow = max (0, min (displayBuffer.rows - 1, hit.grid.row - displayBuffer.yDisp))
-            terminal.sendEvent(buttonFlags: buttonFlags, x: hit.grid.col, y: screenRow, pixelX: hit.pixels.col, pixelY: hit.pixels.row)
+            return terminal.mouseEventBytes(buttonFlags: buttonFlags, x: hit.grid.col, y: screenRow, pixelX: hit.pixels.col, pixelY: hit.pixels.row)
         }
+        sendPointerInput(report)
     }
     
     private var autoScrollDelta = 0
@@ -3830,18 +3838,20 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
 
     private func reportAuxiliaryMouseDrag(with event: NSEvent) -> Bool {
         let point = convert(event.locationInWindow, from: nil)
-        return withTerminal { terminal -> Bool in
+        let report = withTerminal { terminal -> [UInt8]? in
             guard allowMouseReporting,
                   !shiftBypassesMouseReportingLocked(for: event),
-                  terminal.mouseMode.sendButtonTracking() else { return false }
+                  terminal.mouseMode.sendButtonTracking() else { return nil }
             let displayBuffer = terminal.displayBuffer
             let hit = calculateMouseHitLocked(at: point)
             let flags = encodeMouseEventLocked(with: event)
             let screenRow = max(0, min(displayBuffer.rows - 1, hit.grid.row - displayBuffer.yDisp))
-            terminal.sendMotion(buttonFlags: flags, x: hit.grid.col, y: screenRow,
-                                pixelX: hit.pixels.col, pixelY: hit.pixels.row)
-            return true
+            return terminal.mouseMotionBytes(buttonFlags: flags, x: hit.grid.col, y: screenRow,
+                                             pixelX: hit.pixels.col, pixelY: hit.pixels.row)
         }
+        guard let report else { return false }
+        sendPointerInput(report)
+        return true
     }
 
     private func isReportableOtherMouseButton(_ event: NSEvent) -> Bool {
@@ -3968,16 +3978,19 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
         snapshot.didDrag = didSelectionDrag
         guard snapshot.clickCount == 1 else { return }
         let modifiers = semanticPromptModifiers(for: event)
-        let handled = withTerminal { terminal -> Bool in
+        let semanticInput = withTerminal { terminal -> [UInt8]? in
             snapshot.selectionIsActiveAtRelease = selection.active
             guard terminal.mightRouteSemanticPromptClick(modifiers: modifiers,
                                                           snapshot: snapshot) else {
-                return false
+                return nil
             }
-            return terminal.handleSemanticPromptClick(
+            return terminal.semanticPromptClickData(
                 at: hit, modifiers: modifiers, snapshot: snapshot)
         }
-        if handled { setNeedsDisplay(bounds) }
+        if let semanticInput {
+            sendPointerInput(semanticInput)
+            setNeedsDisplay(bounds)
+        }
 
         #if DEBUG
         // let hit = calculateMouseHit(with: event)
@@ -3988,6 +4001,7 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
     
     open override func mouseDragged(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        var report: [UInt8]?
         let dragInfo = withTerminal { terminal -> (hit: Position, displayYDisp: Int, displayRows: Int, handled: Bool) in
             let displayBuffer = terminal.displayBuffer
             let mouseHit = calculateMouseHitLocked(at: point)
@@ -3996,7 +4010,7 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
                 if terminal.mouseMode.sendButtonTracking() {
                     let flags = encodeMouseEventLocked(with: event)
                     let screenRow = max (0, min (displayBuffer.rows - 1, hit.row - displayBuffer.yDisp))
-                    terminal.sendMotion(buttonFlags: flags, x: hit.col, y: screenRow, pixelX: mouseHit.pixels.col, pixelY: mouseHit.pixels.row)
+                    report = terminal.mouseMotionBytes(buttonFlags: flags, x: hit.col, y: screenRow, pixelX: mouseHit.pixels.col, pixelY: mouseHit.pixels.row)
                     return (hit, displayBuffer.yDisp, displayBuffer.rows, true)
                 }
                 if terminal.mouseMode != .off {
@@ -4017,6 +4031,9 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
                 selection.dragExtend(bufferPosition: hit)
             }
             return (hit, displayBuffer.yDisp, displayBuffer.rows, false)
+        }
+        if let report {
+            sendPointerInput(report)
         }
         if dragInfo.handled {
             return
@@ -4217,11 +4234,12 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
         
         if withTerminal({ $0.mouseMode.sendMotionEvent() }) {
             let flags = encodeMouseEvent(with: event, overwriteRelease: true)
-            withTerminal { terminal in
+            let report = withTerminal { terminal -> [UInt8] in
                 let displayBuffer = terminal.displayBuffer
                 let screenRow = max(0, min(displayBuffer.rows - 1, hit.grid.row - displayBuffer.yDisp))
-                terminal.sendMotion(buttonFlags: flags, x: hit.grid.col, y: screenRow, pixelX: hit.pixels.col, pixelY: hit.pixels.row)
+                return terminal.mouseMotionBytes(buttonFlags: flags, x: hit.grid.col, y: screenRow, pixelX: hit.pixels.col, pixelY: hit.pixels.row)
             }
+            sendPointerInput(report)
         }
     }
     
@@ -4406,7 +4424,7 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
                       scrollAccumulator.remainder, lines, button)
             }
             let flags = event.modifierFlags
-            withTerminal { terminal in
+            let (report, reports) = withTerminal { terminal -> ([UInt8], Int) in
                 let displayBuffer = terminal.displayBuffer
                 let screenRow = max(0, min(displayBuffer.rows - 1, hit.grid.row - displayBuffer.yDisp))
                 let buttonFlags = terminal.encodeButton(button: button, release: false,
@@ -4414,11 +4432,12 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
                 let wantedReports = WheelReportBudget.requestedReports(
                     lineCount: lines,
                     isPrecise: event.hasPreciseScrollingDeltas)
-                let reports = wheelReportBudget.grant(wantedReports)
-                for _ in 0..<reports {
-                    terminal.sendEvent(buttonFlags: buttonFlags, x: hit.grid.col, y: screenRow,
-                                       pixelX: hit.pixels.col, pixelY: hit.pixels.row)
-                }
+                let report = terminal.mouseEventBytes(buttonFlags: buttonFlags, x: hit.grid.col, y: screenRow,
+                                                      pixelX: hit.pixels.col, pixelY: hit.pixels.row)
+                return (report, wheelReportBudget.grant(wantedReports))
+            }
+            for _ in 0..<reports {
+                sendPointerInput(report)
             }
         } else if scrollRoute == .cursorKeys {
             if Self.logsMouseInput {

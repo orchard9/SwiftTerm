@@ -4734,6 +4734,19 @@ extension TerminalView {
             button: button, release: release, shift: shift, meta: meta,
             control: control, col: col, row: row, pixelX: pixelX, pixelY: pixelY)
         else { return }
+        sendPointerInput(bytes)
+    }
+
+    /// Delivers the bytes for the user's pointer input - mouse reports and
+    /// semantic prompt clicks - that the view encoded under the terminal lock.
+    /// Call it after releasing the lock. They are user input, so they go to
+    /// ``TerminalViewDelegate/send(source:data:)`` like typing, never through
+    /// the `Terminal` delegate method `send(source:data:)`, which carries the
+    /// replies the terminal generates itself. Unlike keyboard input, they do
+    /// not register an OSC 133 semantic submission.
+    @MainActor
+    func sendPointerInput(_ bytes: [UInt8]) {
+        guard !bytes.isEmpty else { return }
         terminalDelegate?.send(source: self, data: bytes[...])
     }
     

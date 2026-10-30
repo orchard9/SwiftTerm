@@ -3250,19 +3250,34 @@ open class Terminal {
         return data.isEmpty ? nil : data
     }
 
-    /// R6: the shared arbiter entry point for the views. A fresh single click
-    /// can clear an old selection and route if no selection remains at release.
-    /// A drag, an active selection at release, and multi-clicks cannot route.
+    /// R6: the shared arbiter for a completed click; the Apple views apply it
+    /// through `semanticPromptClickData`. A fresh single click can clear an
+    /// old selection and route if no selection remains at release. A drag, an
+    /// active selection at release, and multi-clicks cannot route.
     @discardableResult
     public func handleSemanticPromptClick(at position: Position,
                                           modifiers: SemanticPromptClickModifiers,
                                           snapshot: SemanticPromptPointerSnapshot) -> Bool {
+        guard let data = semanticPromptClickData(at: position, modifiers: modifiers,
+                                                 snapshot: snapshot) else {
+            return false
+        }
+        tdel?.send(source: self, data: data[...])
+        return true
+    }
+
+    /// The input that ``handleSemanticPromptClick(at:modifiers:snapshot:)``
+    /// sends, or nil when the click does not route. A view encodes it under
+    /// the terminal lock and delivers it as user input after releasing it.
+    func semanticPromptClickData(at position: Position,
+                                 modifiers: SemanticPromptClickModifiers,
+                                 snapshot: SemanticPromptPointerSnapshot) -> [UInt8]? {
         guard snapshot.pressWasSemanticEligible,
               snapshot.clickCount == 1, !snapshot.didDrag,
               !snapshot.selectionIsActiveAtRelease else {
-            return false
+            return nil
         }
-        return handleSemanticPromptClick(at: position, modifiers: modifiers)
+        return semanticPromptClickData(at: position, modifiers: modifiers)
     }
 
     /// A cheap pre-check (no geometry, no routing) of whether a completed
@@ -3299,6 +3314,16 @@ open class Terminal {
     @discardableResult
     public func handleSemanticPromptClick(at position: Position,
                                           modifiers: SemanticPromptClickModifiers = []) -> Bool {
+        guard let data = semanticPromptClickData(at: position, modifiers: modifiers) else {
+            return false
+        }
+        // One concatenated write per click.
+        tdel?.send(source: self, data: data[...])
+        return true
+    }
+
+    private func semanticPromptClickData(at position: Position,
+                                         modifiers: SemanticPromptClickModifiers) -> [UInt8]? {
         guard semanticPromptModifiersAllow(modifiers),
               !isCurrentBufferAlternate,
               buffer.semanticInput == .armed,
@@ -3307,47 +3332,37 @@ open class Terminal {
               let geometry = semanticGroupGeometry(),
               geometry.rows.contains(position.row),
               geometry.hasInput else {
-            return false
+            return nil
         }
 
         switch buffer.semanticClickMode {
         case .none:
-            return false
+            return nil
         case .clickEventsAbsolute, .clickEventsRelative:
             let x = position.col + 1
             let y: Int
             if buffer.semanticClickMode == .clickEventsRelative {
                 guard let relativeOrigin = buffer.semanticPromptRelativeOrigin(for: position),
                       position.row >= relativeOrigin.row else {
-                    return false
+                    return nil
                 }
                 y = position.row - relativeOrigin.row
             } else {
                 // Absolute rows are reported clamped to the viewport.
                 y = min(max(position.row - buffer.yBase + 1, 1), rows)
             }
-            sendResponse("\u{1b}[<0;\(x);\(y)M")
-            return true
+            return Array("\u{1b}[<0;\(x);\(y)M".utf8)
         case .cursorKeys(let strategy):
             // The cursor's offset uses buffer.x unclamped so a pending wrap
             // contributes the full row.
             let cursor = Position(col: buffer.x, row: buffer.yBase + buffer.y)
-            guard geometry.rows.contains(cursor.row) else { return false }
+            guard geometry.rows.contains(cursor.row) else { return nil }
             let target = normalizeSemanticClickTarget(position)
-            guard let data = semanticCursorMovementData(strategy: strategy,
-                                                        cursor: cursor,
-                                                        click: target,
-                                                        geometry: geometry) else {
-                return false
-            }
-            // One concatenated write per click.
-            sendRepeatedSemanticSequence(data)
-            return true
+            return semanticCursorMovementData(strategy: strategy,
+                                              cursor: cursor,
+                                              click: target,
+                                              geometry: geometry)
         }
-    }
-
-    private func sendRepeatedSemanticSequence(_ data: [UInt8]) {
-        tdel?.send(source: self, data: data[...])
     }
 
     // MARK: OSC 133 stream handling (R2, R4)
@@ -8760,7 +8775,17 @@ open class Terminal {
      */
     public func sendMotion (buttonFlags: Int, x: Int, y: Int, pixelX: Int, pixelY: Int)
     {
-        sendEvent(buttonFlags: buttonFlags+32, x: x, y: y, pixelX: pixelX, pixelY: pixelY)
+        sendResponse(mouseMotionBytes(buttonFlags: buttonFlags, x: x, y: y,
+                                      pixelX: pixelX, pixelY: pixelY))
+    }
+
+    /// Encodes a motion report like ``sendMotion(buttonFlags:x:y:pixelX:pixelY:)``
+    /// without invoking the delegate, for owners that deliver it after
+    /// releasing TerminalLock.
+    func mouseMotionBytes(buttonFlags: Int, x: Int, y: Int,
+                          pixelX: Int, pixelY: Int) -> [UInt8] {
+        mouseEventBytes(buttonFlags: buttonFlags+32, x: x, y: y,
+                        pixelX: pixelX, pixelY: pixelY)
     }
     
     /// Bits 0...2: tracking (off, X10, VT200, button, any).

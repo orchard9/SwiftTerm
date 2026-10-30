@@ -248,7 +248,7 @@ extension TerminalView: UITextInput {
         }
     }
 
-    public func setMarkedText(_ markedText: String?, selectedRange: NSRange) {
+    open func setMarkedText(_ markedText: String?, selectedRange: NSRange) {
         uitiLog("setMarkedText(\(markedText?.debugDescription ?? "nil"), selectedRange:\(selectedRange)) \(textInputStateDescription())")
         resetKoreanResyllabificationTransaction()
 
@@ -294,7 +294,7 @@ extension TerminalView: UITextInput {
         endTextInputEdit()
     }
     
-    public func unmarkText() {
+    open func unmarkText() {
         uitiLog("unmarkText() \(textInputStateDescription())")
         if let previouslyMarkedRange = _markedTextRange {
             // Ensure that multi-char input (Chinese-Japanese keyboards) works:

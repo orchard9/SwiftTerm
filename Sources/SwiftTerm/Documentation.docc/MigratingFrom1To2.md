@@ -288,6 +288,14 @@ private serial queue. Input registration and queued process output therefore
 use the same FIFO delivery domain. Pass `DispatchQueue.main` explicitly if the
 callbacks must run on the main queue.
 
+## Observe UIKit composition in a host subclass
+
+The existing `TerminalView.setMarkedText(_:selectedRange:)` and `unmarkText()`
+methods are open on UIKit, matching the subclass access of their AppKit
+counterparts. A host can invalidate its own speculative presentation when
+composition begins or ends. Call `super` to preserve UIKit preedit, normalization,
+and committed-input delivery; proposed marked text is not terminal input.
+
 ## Verify the migration
 
 Before you release the updated application:

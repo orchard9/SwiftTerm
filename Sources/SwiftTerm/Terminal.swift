@@ -2889,6 +2889,17 @@ open class Terminal {
         tdel?.send(source: self, data: data)
     }
 
+    /// Encodes `text` as a paste for the current bracketed paste mode and the
+    /// host's terminal-driver control bytes, without sending it.
+    func encodeTextPaste(_ text: String, allowUnsafe: Bool) -> TerminalPaste.EncodingResult {
+        TerminalPaste.encode(
+            text,
+            bracketed: bracketedPasteMode,
+            terminalControlBytes: tdel?.terminalControlBytesForPaste(source: self)
+                ?? TerminalPasteControls.approximateTerminalControlBytes,
+            allowUnsafe: allowUnsafe)
+    }
+
     /// Updates semantic interaction state for input delivered by a view.
     ///
     /// Thread contract: this mutates the incremental scanner state and the

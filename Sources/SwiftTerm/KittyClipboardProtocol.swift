@@ -975,17 +975,10 @@ final class KittyClipboardProtocol: @unchecked Sendable {
         }
 
         guard let text = request.text else { return .failed }
-        let encoded = TerminalPaste.encode(
-            text,
-            bracketed: terminal.bracketedPasteMode,
-            terminalControlBytes: terminal.tdel?.terminalControlBytesForPaste(source: terminal)
-                ?? TerminalPasteControls.approximateTerminalControlBytes,
-            allowUnsafe: allowUnsafe)
-        guard case .encoded(let bytes) = encoded else {
+        guard case .encoded(let bytes) = terminal.encodeTextPaste(text, allowUnsafe: allowUnsafe) else {
             return .rejected
         }
-        terminal.registerUserInput(bytes[...])
-        terminal.tdel?.send(source: terminal, data: bytes[...])
+        terminal.sendUserInput(bytes[...])
         return .textSent
     }
 

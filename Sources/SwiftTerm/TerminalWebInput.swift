@@ -35,9 +35,7 @@ public extension Terminal {
         #if !SWIFTTERM_EMBEDDED
         return paste(TerminalPasteRequest(text: text), allowUnsafe: allowUnsafe) == .textSent
         #else
-        guard case .encoded(let bytes) = TerminalPaste.encode(text, bracketed: bracketedPasteMode,
-            terminalControlBytes: tdel?.terminalControlBytesForPaste(source: self)
-                ?? TerminalPasteControls.approximateTerminalControlBytes, allowUnsafe: allowUnsafe) else { return false }
+        guard case .encoded(let bytes) = encodeTextPaste(text, allowUnsafe: allowUnsafe) else { return false }
         sendUserInput(bytes[...])
         return true
         #endif

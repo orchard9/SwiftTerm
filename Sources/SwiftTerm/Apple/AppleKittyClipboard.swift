@@ -132,15 +132,19 @@ extension TerminalView {
     /// a dropped file's path, for instance - without it being seen as typed
     /// input. A paste that the safety policy rejected is sent again with the
     /// policy relaxed.
+    ///
+    /// The bytes take the user-input path of ``send(data:)`` to
+    /// ``TerminalViewDelegate/send(source:data:)``. They never pass through
+    /// the `Terminal` delegate method `send(source:data:)`, which carries the
+    /// replies the terminal generates itself.
     @MainActor
     public func pasteText(_ text: String) {
-        ensureCaretIsVisible()
-        let request = TerminalPasteRequest(text: text)
-        var result = withTerminal { $0.paste(request) }
-        if result == .rejected {
-            result = withTerminal { $0.paste(request, allowUnsafe: true) }
+        var encoded = withTerminal { $0.encodeTextPaste(text, allowUnsafe: false) }
+        if encoded == .unsafePayload {
+            encoded = withTerminal { $0.encodeTextPaste(text, allowUnsafe: true) }
         }
-        _ = result
+        guard case .encoded(let bytes) = encoded else { return }
+        send(data: bytes[...])
     }
 
     // MARK: Snapshots

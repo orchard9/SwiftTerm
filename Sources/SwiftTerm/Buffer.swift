@@ -323,6 +323,12 @@ public final class Buffer {
     private var marginMode: Bool = false
     private var wraparound: Bool = false
 
+    /// Copies the flags actually used by insertion, rather than Terminal's mode mirrors.
+    var effectiveInsertionModes: (autoWrapEnabled: Bool, insertModeEnabled: Bool,
+                                  leftRightMarginModeEnabled: Bool) {
+        (wraparound, insertMode, marginMode)
+    }
+
     // OSC 133 state belongs to a buffer so switching to the alternate screen
     // cannot leak an in-progress shell prompt into the normal screen.
 

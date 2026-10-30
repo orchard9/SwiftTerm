@@ -100,7 +100,7 @@ Use the narrowest read API that gives the data you need:
 | Status or visible screen | ``TerminalView/terminalStateSnapshot()`` | A copied ``TerminalViewStateSnapshot``. It includes dimensions, cursor state, viewport row, palette state, and visible rows. |
 | Text from the active, normal, or alternate buffer | ``TerminalView/getBufferAsData(kind:encoding:)`` | A copied `Data` value. Select the required ``Terminal/BufferKind``. |
 | The text of a few visible rows | ``TerminalView/visibleRowsText(_:)`` | Copied `String`s for the rows asked for, using the same NUL-free display-text conversion as ``TerminalContentRowSnapshot/text`` and ``TerminalVisibleRowSnapshot/text``. Cheaper than a content snapshot when a host polls the bottom of the screen or reads the row under a click. |
-| Bounded viewport or history contents | ``TerminalView/terminalContentSnapshot(region:)`` | A copied ``TerminalContentSnapshot`` with input state, row coordinates, cell text, widths, attributes, wrap flags, and row text using the same conversion as ``TerminalView/visibleRowsText(_:)``. |
+| Bounded viewport or history contents | ``TerminalView/terminalContentSnapshot(region:)`` | A copied ``TerminalContentSnapshot`` with input state, layout, cursor and row coordinates, cell text, widths, attributes, wrap flags, single-width row eligibility, and row text using the same conversion as ``TerminalView/visibleRowsText(_:)``. |
 | Whether the application enabled the kitty keyboard protocol | ``TerminalView/keyboardEnhancementFlags`` | A copied `KittyKeyboardFlags`. Read it before a host event monitor rebinds a key the view would otherwise encode itself. |
 | A terminal event outside the displayed content | `TerminalView.observeOscEvents(_:)` | A copied ``TerminalOscEvent`` goes to an `@Sendable` handler. Retain its ``TerminalOscObservation`` token for the required lifetime. |
 
@@ -111,6 +111,71 @@ response that must change parser behavior. If an application owns a
 ``Terminal`` directly, it can instead use
 ``Terminal/observeOscEvents(_:)`` or
 ``Terminal/registerOscHandler(code:handler:)``.
+
+#### Copied layout and conservative text metrics
+
+``TerminalContentSnapshot/layout`` is a ``TerminalContentLayoutSnapshot`` captured
+under the same terminal lock as input state, cursor coordinates, and cells. All
+are detached values: later feed, scrolling, reset, resize, or buffer switching
+does not change an existing snapshot. The TerminalView and HeadlessTerminal
+content-snapshot entry points forward this same value; no additional read is
+needed to obtain layout.
+
+Insertion flags (`autoWrapEnabled`, `insertModeEnabled`, and
+`leftRightMarginModeEnabled`), horizontal margins, and scroll bounds come from the
+selected buffer, as do the rows and cursor coordinates. The insertion flags
+report the effective Buffer behavior, not potentially stale Terminal mode
+mirrors. `originModeEnabled`, `synchronizedOutputActive`, and `cursorVisible` are
+current terminal-global state, even when selecting an inactive buffer through
+`Terminal.contentSnapshot(region:buffer:)`. Input state still identifies the
+active buffer; selecting normal-buffer history while the alternate screen is
+active does not change `inputState.isAlternateBuffer`.
+
+While the alternate screen is active, normal-buffer resizing can be deferred
+until that buffer is activated again. A snapshot selecting that inactive normal
+buffer copies its retained geometry (including cell counts and live-screen
+extent). `inputState.dimensions` still describes the current terminal grid;
+do not substitute it for selected-buffer layout bounds.
+
+`leftMargin` and `rightMargin` are inclusive, zero-based effective column bounds.
+They span the full width when left/right margin mode is disabled. `scrollTop`
+and `scrollBottom` are inclusive zero-based **live-screen** rows, not history or
+viewport row numbers. Add `snapshot.liveTopRow` to either to obtain the same
+scroll-invariant coordinates as `cursorRow` and each row's `absoluteRow`.
+Origin mode does not make the copied cursor coordinates relative to the margins.
+
+`cursorColumn` preserves the logical insertion position, including a position
+beyond the right margin. `isWrapPending` is exactly
+`layout.autoWrapEnabled && cursorColumn > layout.rightMargin`. It is not a
+general character-fit check: a width-two glyph needs to wrap if only one column
+remains, even though `isWrapPending` is false. Disabled autowrap never reports
+pending wrap. Each row's `isSingleWidth` is false for double-width lines and both
+halves of double-height lines; it describes the line's render mode, not its
+individual cell widths.
+
+Synchronized output does not prevent a content copy: the copied state can
+describe an intermediate frame while `synchronizedOutputActive` is true. This
+is inspection, not a display-commit or remote-input acknowledgement.
+`cursorVisible` reports whether the cursor is enabled, independent of blink
+phase and whether the cursor lies in the displayed viewport.
+
+Public construction now requires an explicit `layout` for a content snapshot
+and `isSingleWidth` for each row. Supply the actual geometry and policy rather
+than assuming full-screen margins or a single-width render mode.
+
+``TerminalTextMetrics/simpleGraphemeWidth(_:)`` reuses the emulator's Unicode
+width policy and returns 1 or 2 for an eligible standalone base with only safe,
+zero-width combining marks of nonzero canonical combining class. Ordinary
+narrow/wide glyphs and simple combining clusters are supported. Empty or
+multiple-grapheme strings, controls, isolated marks, variation selectors,
+joiners, regional indicators, and contextual spacing/linker/shaping sequences
+return `nil`. Treat `nil` as unsupported, not width zero or width one. This
+helper does not model margins, line render modes, or independence from preceding
+text; a Swift `Character` is not necessarily one terminal column.
+
+Neither layout nor a supported width grants permission to locally echo input.
+These APIs cannot establish that a remote program has not entered secret or
+no-echo input mode.
 
 ### Send data and change terminal state
 

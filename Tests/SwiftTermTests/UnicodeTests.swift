@@ -105,6 +105,101 @@ private enum UnicodeColumnWidthReference {
 
 @Suite(.serialized)
 final class SwiftTermUnicode {
+
+    @Test func testSimpleGraphemeMetricsMatchTerminalCellsAndCursor() throws {
+        let cases: [(text: String, width: Int)] = [
+            (" ", 1), ("A", 1), ("~", 1), ("é", 1), ("Ω", 1),
+            ("\u{26E9}", 1), ("界", 2), ("\u{1F9E0}", 2),
+            ("가", 2), ("각", 2), ("가\u{0301}", 2),
+            ("e\u{0301}", 1), ("v\u{0307}\u{0301}", 1),
+            ("界\u{0301}", 2)
+        ]
+        for item in cases {
+            let width = try #require(TerminalTextMetrics.simpleGraphemeWidth(item.text))
+            #expect(width == item.width)
+            let harness = TerminalTestHarness.makeTerminal(cols: 8, rows: 2)
+            let terminal = harness.terminal
+            terminal.feed(text: item.text)
+            #expect(terminal.getCharData(col: 0, row: 0)?.width == Int8(width))
+            #expect(terminal.getCharacter(col: 0, row: 0) == Character(item.text))
+            #expect(terminal.getCursorLocation().x == width)
+            #expect(terminal.getCursorLocation().y == 0)
+            if width == 2 {
+                #expect(terminal.getCharData(col: 1, row: 0)?.width == 0)
+            }
+            terminal.feed(text: "x")
+            #expect(terminal.getCharacter(col: width, row: 0) == "x")
+            #expect(terminal.getCursorLocation().x == width + 1)
+        }
+    }
+
+    @Test func testSimpleGraphemeMetricsMatchSplitCombiningInput() throws {
+        for base in ["e", "界"] {
+            let marks = "\u{0301}\u{0323}"
+            let width = try #require(TerminalTextMetrics.simpleGraphemeWidth(base + marks))
+            let harness = TerminalTestHarness.makeTerminal(cols: 8, rows: 2)
+            let terminal = harness.terminal
+            terminal.feed(text: base)
+            #expect(terminal.getCursorLocation().x == width)
+            for mark in marks.unicodeScalars {
+                terminal.feed(text: String(mark))
+                #expect(terminal.getCursorLocation().x == width)
+                #expect(terminal.getCharData(col: 0, row: 0)?.width == Int8(width))
+            }
+            #expect(terminal.getCharacter(col: 0, row: 0) == Character(base + marks))
+            terminal.feed(text: "x")
+            #expect(terminal.getCharacter(col: width, row: 0) == "x")
+            #expect(terminal.getCursorLocation().x == width + 1)
+            #expect(TerminalTextMetrics.simpleGraphemeWidth(marks) == nil)
+        }
+    }
+
+    @Test func testSimpleGraphemeMetricsRejectUnsupportedText() {
+        let cases: [(reason: String, text: String)] = [
+            ("empty", ""),
+            ("multiple bases", "ab"),
+            ("base after combining cluster", "e\u{0301}x"),
+            ("NUL", "\u{0000}"),
+            ("terminal control", "\u{001B}"),
+            ("C0 boundary", "\u{001F}"),
+            ("DEL", "\u{007F}"),
+            ("C1 boundary", "\u{009F}"),
+            ("newline after base", "a\n"),
+            ("soft hyphen has positive width but is a grapheme control", "\u{00AD}"),
+            ("isolated combining mark", "\u{0301}"),
+            ("isolated variation selector", "\u{FE0F}"),
+            ("emoji variation selector", "\u{26E9}\u{FE0F}"),
+            ("text variation selector", "\u{2614}\u{FE0E}"),
+            ("supplementary variation selector", "界\u{E0100}"),
+            ("Mongolian variation selector", "a\u{180F}"),
+            ("zero-width joiner", "a\u{200D}"),
+            ("zero-width non-joiner", "a\u{200C}"),
+            ("emoji ZWJ sequence", "\u{1F469}\u{200D}\u{1F4BB}"),
+            ("isolated emoji modifier", "\u{1F3FB}"),
+            ("emoji modifier sequence", "\u{1F44D}\u{1F3FB}"),
+            ("regional indicator", "\u{1F1FA}"),
+            ("flag", "\u{1F1FA}\u{1F1F8}"),
+            ("prepend scalar", "\u{0601}"),
+            ("prepend sequence", "\u{0601}\u{06F1}"),
+            ("Hangul component", "\u{1100}"),
+            ("Hangul syllable components", "\u{1100}\u{1161}"),
+            ("precomposed Hangul followed by conjoining Jamo", "\u{AC00}\u{11A8}"),
+            ("Indic conjunct base", "\u{0915}"),
+            ("Indic conjunct", "\u{0915}\u{094D}\u{0937}"),
+            ("spacing mark", "a\u{09BE}"),
+            ("spacing mark with nonzero combining class", "a\u{302E}"),
+            ("nonspacing virama", "a\u{094D}"),
+            ("virama outside Indic conjunct linker set", "a\u{0BCD}"),
+            ("Khmer conjunct linker", "a\u{17D2}"),
+            ("enclosing keycap with zero combining class", "1\u{20E3}"),
+            ("combining grapheme joiner with zero combining class", "a\u{034F}"),
+            ("emoji tag", "\u{1F3F4}\u{E0067}\u{E007F}")
+        ]
+        for item in cases {
+            #expect(TerminalTextMetrics.simpleGraphemeWidth(item.text) == nil,
+                    "\(item.reason)")
+        }
+    }
     
     @Test func testCombiningCharacters() {
         let h = HeadlessTerminal (queue: SwiftTermTests.queue) { exitCode in }

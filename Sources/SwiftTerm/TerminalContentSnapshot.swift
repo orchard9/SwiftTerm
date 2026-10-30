@@ -47,6 +47,53 @@ public struct TerminalInputStateSnapshot: Sendable, Equatable {
     }
 }
 
+/// Copied layout policy captured with the contents, not permission to echo input.
+///
+/// Insertion modes and bounds belong to the selected buffer. Origin mode,
+/// synchronized output, and cursor visibility describe the terminal's current
+/// global state, even when an inactive buffer is selected.
+public struct TerminalContentLayoutSnapshot: Sendable, Equatable {
+    public let autoWrapEnabled: Bool
+    public let insertModeEnabled: Bool
+    public let leftRightMarginModeEnabled: Bool
+    public let originModeEnabled: Bool
+    /// Effective inclusive, zero-based column bounds; full width when LR mode is off.
+    public let leftMargin: Int
+    public let rightMargin: Int
+    /// Inclusive zero-based live-screen rows. Add `TerminalContentSnapshot.liveTopRow`
+    /// to convert either bound to the snapshot's absolute content row coordinates.
+    public let scrollTop: Int
+    public let scrollBottom: Int
+    /// Whether DEC synchronized output is currently active, not whether copying is blocked.
+    public let synchronizedOutputActive: Bool
+    /// Whether the cursor is enabled, independent of blinking or viewport visibility.
+    public let cursorVisible: Bool
+
+    public init(
+        autoWrapEnabled: Bool,
+        insertModeEnabled: Bool,
+        leftRightMarginModeEnabled: Bool,
+        originModeEnabled: Bool,
+        leftMargin: Int,
+        rightMargin: Int,
+        scrollTop: Int,
+        scrollBottom: Int,
+        synchronizedOutputActive: Bool,
+        cursorVisible: Bool
+    ) {
+        self.autoWrapEnabled = autoWrapEnabled
+        self.insertModeEnabled = insertModeEnabled
+        self.leftRightMarginModeEnabled = leftRightMarginModeEnabled
+        self.originModeEnabled = originModeEnabled
+        self.leftMargin = leftMargin
+        self.rightMargin = rightMargin
+        self.scrollTop = scrollTop
+        self.scrollBottom = scrollBottom
+        self.synchronizedOutputActive = synchronizedOutputActive
+        self.cursorVisible = cursorVisible
+    }
+}
+
 /// Selects a bounded region of the active buffer to copy.
 public enum TerminalContentRegion: Sendable, Equatable {
     /// The currently displayed rows, including when scrolled into history.
@@ -74,6 +121,8 @@ public struct TerminalContentRowSnapshot: Sendable, Equatable {
     public let absoluteRow: Int
     /// True when this row is a soft-wrapped continuation of the preceding row.
     public let isWrapped: Bool
+    /// False for double-width and either half of a double-height line.
+    public let isSingleWidth: Bool
     public let cells: [TerminalCellSnapshot]
     /// Right-trimmed display text without internal NUL placeholders.
     ///
@@ -83,9 +132,11 @@ public struct TerminalContentRowSnapshot: Sendable, Equatable {
         terminalContentSnapshotText(cells)
     }
 
-    public init(absoluteRow: Int, cells: [TerminalCellSnapshot], isWrapped: Bool = false) {
+    public init(absoluteRow: Int, cells: [TerminalCellSnapshot], isSingleWidth: Bool,
+                isWrapped: Bool = false) {
         self.absoluteRow = absoluteRow
         self.isWrapped = isWrapped
+        self.isSingleWidth = isSingleWidth
         self.cells = cells
     }
 }
@@ -98,23 +149,33 @@ private func terminalContentSnapshotText(_ cells: [TerminalCellSnapshot]) -> Str
         text: { cells[$0].text.isEmpty ? "\u{0}" : cells[$0].text }))
 }
 
-/// Contents and input state captured in one terminal-lock transaction.
+/// Contents, layout, and input state captured in one terminal-lock transaction.
 ///
 /// Row numbers use the same scroll-invariant coordinate space as
 /// `Terminal.getScrollInvariantLine(row:)`. Only `capturedRange` is copied;
 /// it is not necessarily the complete history retained by the terminal.
 public struct TerminalContentSnapshot: Sendable, Equatable {
     public let inputState: TerminalInputStateSnapshot
+    public let layout: TerminalContentLayoutSnapshot
     public let capturedRange: Range<Int>
     public let liveTopRow: Int
     public let rows: [TerminalContentRowSnapshot]
     /// The cursor row of the copied buffer, in the coordinates of `absoluteRow`.
     public let cursorRow: Int
-    /// The cursor column of the copied buffer.
+    /// The logical cursor column of the copied buffer, not clamped to the right margin.
     public let cursorColumn: Int
+
+    /// Whether a subsequent ordinary narrow glyph would wrap before insertion.
+    ///
+    /// A width-two glyph can require wrapping even when this is false because it
+    /// does not fit in the remaining columns. This is not a general fit predicate.
+    public var isWrapPending: Bool {
+        layout.autoWrapEnabled && cursorColumn > layout.rightMargin
+    }
 
     public init(
         inputState: TerminalInputStateSnapshot,
+        layout: TerminalContentLayoutSnapshot,
         capturedRange: Range<Int>,
         liveTopRow: Int,
         rows: [TerminalContentRowSnapshot],
@@ -122,6 +183,7 @@ public struct TerminalContentSnapshot: Sendable, Equatable {
         cursorColumn: Int = 0
     ) {
         self.inputState = inputState
+        self.layout = layout
         self.capturedRange = capturedRange
         self.liveTopRow = liveTopRow
         self.rows = rows
@@ -166,8 +228,20 @@ extension Terminal {
                                buffer kind: BufferKind = .active) -> TerminalContentSnapshot {
         terminalLock.preconditionLocked()
         let source = kind == .active ? displayBuffer : bufferFromKind(kind: kind)
+        let modes = source.effectiveInsertionModes
+        let layout = TerminalContentLayoutSnapshot(
+            autoWrapEnabled: modes.autoWrapEnabled,
+            insertModeEnabled: modes.insertModeEnabled,
+            leftRightMarginModeEnabled: modes.leftRightMarginModeEnabled,
+            originModeEnabled: originMode,
+            leftMargin: modes.leftRightMarginModeEnabled ? source.marginLeft : 0,
+            rightMargin: modes.leftRightMarginModeEnabled ? source.marginRight : source.cols - 1,
+            scrollTop: source.scrollTop,
+            scrollBottom: source.scrollBottom,
+            synchronizedOutputActive: synchronizedOutputActive,
+            cursorVisible: !cursorHidden)
         let count = source.lines.count
-        let screenRows = min(max(0, rows), count)
+        let screenRows = min(max(0, source.rows), count)
         let liveStart = count - screenRows
         let start: Int
         let end: Int
@@ -181,7 +255,7 @@ extension Terminal {
         }
         let copiedRows = (start..<end).map { index in
             let line = source.lines[index]
-            let width = min(cols, line.count)
+            let width = min(source.cols, line.count)
             let cells = (0..<width).map { column in
                 let cell = line[column]
                 return TerminalCellSnapshot(
@@ -192,10 +266,12 @@ extension Terminal {
             return TerminalContentRowSnapshot(
                 absoluteRow: source.linesTop + index,
                 cells: cells,
+                isSingleWidth: line.renderMode == .single,
                 isWrapped: line.isWrapped)
         }
         return TerminalContentSnapshot(
             inputState: inputStateSnapshotLocked(),
+            layout: layout,
             capturedRange: (source.linesTop + start)..<(source.linesTop + end),
             liveTopRow: source.linesTop + liveStart,
             rows: copiedRows,
@@ -203,7 +279,7 @@ extension Terminal {
             cursorColumn: source.x)
     }
 
-    /// Copies a bounded region and its input state under one terminal lock.
+    /// Copies a bounded region, layout, and input state under one terminal lock.
     ///
     /// Do not call this method while you hold ``terminalLock`` or from a
     /// terminal delegate callback that already holds it.
@@ -217,6 +293,11 @@ extension Terminal {
     /// buffer; `.normal` copies the shell history also while a full-screen
     /// program shows the alternate screen. ``TerminalInputStateSnapshot/isAlternateBuffer``
     /// still tells which buffer is active.
+    /// Layout insertion modes, margins, scroll bounds, rows, and cursor coordinates
+    /// come from the selected buffer. Other input modes and layout's origin mode,
+    /// synchronized-output state, and cursor visibility describe current global state.
+    /// An inactive normal buffer can retain its pre-resize geometry until activated;
+    /// its copied bounds and cells use that geometry, while input dimensions are current.
     public func contentSnapshot(region: TerminalContentRegion,
                                 buffer: BufferKind = .active) -> TerminalContentSnapshot {
         terminalLock.withLock { contentSnapshotLocked(region: region, buffer: buffer) }

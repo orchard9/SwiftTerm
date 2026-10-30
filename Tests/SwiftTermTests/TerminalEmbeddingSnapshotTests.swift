@@ -57,6 +57,57 @@ struct TerminalEmbeddingSnapshotTests {
         #expect(snapshot.inputState.dimensions == TerminalDimensions(cols: 12, rows: 4))
     }
 
+    @Test func copiedLayoutIncludesSynchronizedOutputAndOutlivesViewChanges() throws {
+        let view = makeView()
+        view.feed(text: "\u{1b}[?69h\u{1b}[3;8s\u{1b}[2;3r\u{1b}[?6h\u{1b}[H")
+        view.feed(text: "\u{1b}[?25l\u{1b}[?2026habcdef")
+        let copied = try #require(view.terminalContentSnapshot(region: .viewport))
+        #expect(copied.layout.synchronizedOutputActive)
+        #expect(!copied.layout.cursorVisible)
+        #expect(copied.layout.originModeEnabled)
+        #expect(copied.layout.leftRightMarginModeEnabled)
+        #expect(copied.layout.leftMargin == 2)
+        #expect(copied.layout.rightMargin == 7)
+        #expect(copied.layout.scrollTop == 1)
+        #expect(copied.layout.scrollBottom == 2)
+        #expect(copied.cursorRow == copied.liveTopRow + 1)
+        #expect(copied.cursorColumn == 8)
+        #expect(copied.isWrapPending)
+        #expect(copied.rows[1].text == "  abcdef")
+        #expect(copied.rows[1].isSingleWidth)
+
+        view.feed(text: "界\u{1b}[?2026l\u{1b}[?25h")
+        let wrapped = try #require(view.terminalContentSnapshot(region: .viewport))
+        #expect(!wrapped.layout.synchronizedOutputActive)
+        #expect(wrapped.layout.cursorVisible)
+        #expect(!wrapped.isWrapPending)
+        #expect(wrapped.cursorRow == wrapped.liveTopRow + 2)
+        #expect(wrapped.cursorColumn == 4)
+        #expect(wrapped.rows[2].cells[2].text == "界")
+        #expect(wrapped.rows[2].cells[2].width == 2)
+        #expect(wrapped.rows[2].isWrapped)
+
+        view.resize(cols: 8, rows: 3)
+        view.feed(text: "\u{1b}[?1049h\u{1b}[?69l\u{1b}[?6l\u{1b}[Hnew")
+        let alternate = try #require(view.terminalContentSnapshot(region: .viewport))
+        #expect(alternate.inputState.isAlternateBuffer)
+        #expect(alternate.inputState.dimensions == TerminalDimensions(cols: 8, rows: 3))
+        #expect(alternate.layout.leftMargin == 0)
+        #expect(alternate.layout.rightMargin == 7)
+        #expect(!alternate.layout.originModeEnabled)
+        #expect(alternate.rows[0].text == "new")
+        #expect(!copied.inputState.isAlternateBuffer)
+        #expect(copied.inputState.dimensions == TerminalDimensions(cols: 12, rows: 4))
+        #expect(copied.layout.synchronizedOutputActive)
+        #expect(!copied.layout.cursorVisible)
+        #expect(copied.layout.originModeEnabled)
+        #expect(copied.layout.leftRightMarginModeEnabled)
+        #expect(copied.cursorColumn == 8)
+        #expect(copied.isWrapPending)
+        #expect(copied.rows[1].text == "  abcdef")
+        #expect(copied.rows[2].text.isEmpty)
+    }
+
     @Test func fullCellTextDoesNotUseCharacterProjection() throws {
         let view = makeView()
         let text = "\u{A98F}\u{A9C0}\u{A994}\u{A9B8}"
@@ -135,6 +186,7 @@ struct TerminalEmbeddingSnapshotTests {
     @Test func valueTypesAreCheckedSendable() {
         func requireSendable<T: Sendable>(_: T.Type) {}
         requireSendable(TerminalInputStateSnapshot.self)
+        requireSendable(TerminalContentLayoutSnapshot.self)
         requireSendable(TerminalContentRegion.self)
         requireSendable(TerminalCellSnapshot.self)
         requireSendable(TerminalContentRowSnapshot.self)

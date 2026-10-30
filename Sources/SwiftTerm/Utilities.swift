@@ -10,6 +10,54 @@
 import Foundation
 #endif
 
+/// Conservative cell measurements using the terminal's Unicode width policy.
+public enum TerminalTextMetrics {
+    /// Returns one or two columns for a standalone base followed only by simple
+    /// zero-width marks with a nonzero canonical combining class.
+    ///
+    /// Returns `nil` for empty text, multiple graphemes, controls, isolated marks,
+    /// variation selectors, emoji modifiers, regional indicators, joiners,
+    /// spacing marks, linkers, and contextual grapheme components (including
+    /// conjoining Hangul Jamo and Indic-conjunct components). This is not a
+    /// general shaping API; precomposed Hangul syllables are supported.
+    ///
+    /// The result does not account for margins, wrapping, terminal modes, or
+    /// whether preceding terminal content could combine with this text.
+    public static func simpleGraphemeWidth(_ text: String) -> Int? {
+        var scalars = text.unicodeScalars.makeIterator()
+        guard let base = scalars.next() else { return nil }
+        let width = UnicodeUtil.columnWidth(rune: base)
+        guard width == 1 || width == 2 else { return nil }
+
+        // Printable ASCII already passed columnWidth's fast path.
+        if base.value >= 0x80 {
+            let properties = UnicodeUtil.graphemeProperties(base.value)
+            // The generated Hangul class order is L, V, T, LV, LVT. Only the
+            // final two classes are complete, precomposed syllables.
+            let firstSyllableClass = UnicodeWidthData.graphemeClassHangulMax - 1
+            let isPrecomposedHangul = properties >= firstSyllableClass &&
+                properties <= UnicodeWidthData.graphemeClassHangulMax
+            guard properties == 0 || isPrecomposedHangul,
+                  !UnicodeUtil.isRegionalIndicator(base.value) else { return nil }
+        }
+
+        while let mark = scalars.next() {
+            let value = mark.value
+            guard UnicodeUtil.isCombining(value),
+                  UnicodeUtil.columnWidth(rune: mark) == 0,
+                  !UnicodeUtil.isSpacingMarkWidth(value),
+                  !UnicodeUtil.isVirama(value) else { return nil }
+            let properties = UnicodeUtil.graphemeProperties(value)
+            guard properties & UnicodeWidthData.graphemeExtendMask != 0,
+                  UnicodeUtil.indicConjunctBreak(properties: properties) != .linker
+            else { return nil }
+            // GB9 joins each accepted Extend to the base. Excluding spacing
+            // marks and linkers keeps the emulator's combined cell width fixed.
+        }
+        return width
+    }
+}
+
 struct UnicodeUtil {
     enum IndicConjunctBreak: UInt8 {
         case none

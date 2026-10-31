@@ -1238,8 +1238,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         let cellHeight = cellDimension.height
         guard cellHeight > 0 else { return }
 
-        // Keep routing, coordinate conversion, and report encoding in one terminal operation.
-        var wheelReports: (report: [UInt8], count: Int)?
+        // Keep routing, coordinate conversion, and reports in one terminal operation.
         let cursorLines = withTerminal { terminal -> Int in
             let route = ProgramScrollRouting.route(
                 allowMouseReporting: allowMouseReporting,
@@ -1280,9 +1279,12 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
                     meta: modifiers.contains(.alternate),
                     control: modifiers.contains(.control) ||
                         (terminalAccessory?.controlModifier ?? controlModifier))
-                wheelReports = (terminal.mouseEventBytes(buttonFlags: flags, x: grid.col, y: grid.row,
-                                                         pixelX: hit.pixels.col, pixelY: hit.pixels.row),
-                                reports)
+                // Wheel reports go out as terminal reports, like the
+                // replies, so hosts do not treat scrolling as typing.
+                for _ in 0..<reports {
+                    terminal.sendEvent(buttonFlags: flags, x: grid.col, y: grid.row,
+                                       pixelX: hit.pixels.col, pixelY: hit.pixels.row)
+                }
                 return 0
             case .cursorKeys:
                 let keys = wheelReportBudget.grant(
@@ -1290,11 +1292,6 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
                 return lines > 0 ? keys : -keys
             case .none:
                 return 0
-            }
-        }
-        if let wheelReports {
-            for _ in 0..<wheelReports.count {
-                sendPointerInput(wheelReports.report)
             }
         }
         // The key helpers acquire the terminal lock themselves.
@@ -1545,23 +1542,22 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     /// Hover has no pressed button. Only Any Event Tracking (1003) requests these reports.
     func forwardPointerHover(at point: CGPoint, modifiers: UIKeyModifierFlags) {
         guard allowMouseReporting, bounds.contains(point) else { return }
-        let report = withTerminal { terminal -> [UInt8]? in
+        // Hover is not deliberate input: it goes out as a terminal report,
+        // like the replies, so hosts do not treat it as typing.
+        withTerminal { terminal in
             guard terminal.mouseMode.sendMotionEvent(),
-                  !modifiers.contains(.shift) || terminal.mouseShiftCapture else { return nil }
+                  !modifiers.contains(.shift) || terminal.mouseShiftCapture else { return }
             let hit = calculateTapHitLocked(point: point)
             guard let grid = hit.grid.toScreenCoordinate(from: terminal.displayBuffer),
-                  grid.row < terminal.rows else { return nil }
+                  grid.row < terminal.rows else { return }
             // Do not consume the keyboard's pending Control modifier on pointer motion.
             let flags = terminal.encodeButton(
                 button: 0, release: true,
                 shift: modifiers.contains(.shift),
                 meta: modifiers.contains(.alternate),
                 control: modifiers.contains(.control))
-            return terminal.mouseMotionBytes(buttonFlags: flags, x: grid.col, y: grid.row,
-                                             pixelX: hit.pixels.col, pixelY: hit.pixels.row)
-        }
-        if let report {
-            sendPointerInput(report)
+            terminal.sendMotion(buttonFlags: flags, x: grid.col, y: grid.row,
+                                pixelX: hit.pixels.col, pixelY: hit.pixels.row)
         }
     }
 
@@ -1947,12 +1943,13 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     }
     
     /// Receives the bytes the ``Terminal`` produces itself - replies to the
-    /// application's queries and reports such as focus changes - and forwards
+    /// application's queries and reports such as focus changes, pointer
+    /// motion without a pressed button and mouse wheel reports - and forwards
     /// them to ``TerminalViewDelegate/send(source:data:)`` on the main actor.
-    /// User input the view encodes (typing, text paste, mouse reports and
-    /// semantic prompt clicks) goes to that delegate method directly and never
-    /// passes through here, so a subclass can route replies separately by
-    /// overriding this method.
+    /// Deliberate user input the view encodes (typing, text paste, button
+    /// presses, releases and drags, and semantic prompt clicks) goes to that
+    /// delegate method directly and never passes through here, so a subclass
+    /// can route replies separately by overriding this method.
     nonisolated open func send(source: Terminal, data: ArraySlice<UInt8>) {
         let capturedData = Array(data)
         onMain { [weak self] in

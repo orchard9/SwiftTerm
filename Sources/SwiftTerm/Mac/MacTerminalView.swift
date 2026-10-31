@@ -1516,12 +1516,13 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
     }
     
     /// Receives the bytes the ``Terminal`` produces itself - replies to the
-    /// application's queries and reports such as focus changes - and forwards
+    /// application's queries and reports such as focus changes, pointer
+    /// motion without a pressed button and mouse wheel reports - and forwards
     /// them to ``TerminalViewDelegate/send(source:data:)`` on the main actor.
-    /// User input the view encodes (typing, text paste, mouse reports and
-    /// semantic prompt clicks) goes to that delegate method directly and never
-    /// passes through here, so a subclass can route replies separately by
-    /// overriding this method.
+    /// Deliberate user input the view encodes (typing, text paste, button
+    /// presses, releases and drags, and semantic prompt clicks) goes to that
+    /// delegate method directly and never passes through here, so a subclass
+    /// can route replies separately by overriding this method.
     nonisolated open func send(source: Terminal, data: ArraySlice<UInt8>) {
         let capturedData = Array(data)
         onMain { [weak self] in
@@ -4234,12 +4235,13 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
         
         if withTerminal({ $0.mouseMode.sendMotionEvent() }) {
             let flags = encodeMouseEvent(with: event, overwriteRelease: true)
-            let report = withTerminal { terminal -> [UInt8] in
+            // Hover is not deliberate input: it goes out as a terminal
+            // report, like the replies, so hosts do not treat it as typing.
+            withTerminal { terminal in
                 let displayBuffer = terminal.displayBuffer
                 let screenRow = max(0, min(displayBuffer.rows - 1, hit.grid.row - displayBuffer.yDisp))
-                return terminal.mouseMotionBytes(buttonFlags: flags, x: hit.grid.col, y: screenRow, pixelX: hit.pixels.col, pixelY: hit.pixels.row)
+                terminal.sendMotion(buttonFlags: flags, x: hit.grid.col, y: screenRow, pixelX: hit.pixels.col, pixelY: hit.pixels.row)
             }
-            sendPointerInput(report)
         }
     }
     
@@ -4424,7 +4426,9 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
                       scrollAccumulator.remainder, lines, button)
             }
             let flags = event.modifierFlags
-            let (report, reports) = withTerminal { terminal -> ([UInt8], Int) in
+            // Wheel reports go out as terminal reports, like the replies,
+            // so hosts do not treat scrolling as typing.
+            withTerminal { terminal in
                 let displayBuffer = terminal.displayBuffer
                 let screenRow = max(0, min(displayBuffer.rows - 1, hit.grid.row - displayBuffer.yDisp))
                 let buttonFlags = terminal.encodeButton(button: button, release: false,
@@ -4432,12 +4436,10 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
                 let wantedReports = WheelReportBudget.requestedReports(
                     lineCount: lines,
                     isPrecise: event.hasPreciseScrollingDeltas)
-                let report = terminal.mouseEventBytes(buttonFlags: buttonFlags, x: hit.grid.col, y: screenRow,
-                                                      pixelX: hit.pixels.col, pixelY: hit.pixels.row)
-                return (report, wheelReportBudget.grant(wantedReports))
-            }
-            for _ in 0..<reports {
-                sendPointerInput(report)
+                for _ in 0..<wheelReportBudget.grant(wantedReports) {
+                    terminal.sendEvent(buttonFlags: buttonFlags, x: hit.grid.col, y: screenRow,
+                                       pixelX: hit.pixels.col, pixelY: hit.pixels.row)
+                }
             }
         } else if scrollRoute == .cursorKeys {
             if Self.logsMouseInput {

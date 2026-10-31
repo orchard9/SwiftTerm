@@ -139,5 +139,58 @@ struct UserInputRoutingTests {
         // Like a mouse report, the click is not a submission.
         #expect(view.withTerminal { $0.buffer.semanticInput } == .armed)
     }
+
+    @Test func buttonDragTakesTheInputPath() {
+        let (view, delegate, window) = makeWindowedView()
+        view.feed(text: "\(esc)[?1002h\(esc)[?1006h")
+        let click = leftClick(on: view, in: window, col: 1)
+        let dragPoint = CGPoint(x: 3.5 * view.cellDimension.width,
+                                y: view.frame.height - 0.5 * view.cellDimension.height)
+        let drag = NSEvent.mouseEvent(with: .leftMouseDragged, location: dragPoint,
+                                      modifierFlags: [], timestamp: 0,
+                                      windowNumber: window.windowNumber, context: nil,
+                                      eventNumber: 3, clickCount: 1, pressure: 1)!
+
+        view.mouseDown(with: click.down)
+        view.mouseDragged(with: drag)
+
+        #expect(delegate.sent == [Array("\(esc)[<0;2;1M".utf8), Array("\(esc)[<32;4;1M".utf8)])
+        #expect(view.recordedReplies.isEmpty)
+    }
+
+    /// Hover is not deliberate input: a host must be able to keep it from
+    /// counting as typing, so it takes the reply path.
+    @Test func hoverMotionTakesTheReplyPath() {
+        let (view, delegate, window) = makeWindowedView()
+        view.feed(text: "\(esc)[?1003h\(esc)[?1006h")
+        let point = CGPoint(x: 2.5 * view.cellDimension.width,
+                            y: view.frame.height - 0.5 * view.cellDimension.height)
+        let move = NSEvent.mouseEvent(with: .mouseMoved, location: point,
+                                      modifierFlags: [], timestamp: 0,
+                                      windowNumber: window.windowNumber, context: nil,
+                                      eventNumber: 1, clickCount: 0, pressure: 0)!
+
+        view.mouseMoved(with: move)
+
+        #expect(view.recordedReplies == [Array("\(esc)[<35;3;1M".utf8)])
+        #expect(delegate.sent.isEmpty)
+    }
+
+    /// Scrolling is not typing either: wheel reports take the reply path.
+    @Test func wheelReportsTakeTheReplyPath() throws {
+        let (view, delegate, _) = makeWindowedView()
+        view.feed(text: "\(esc)[?1000h\(esc)[?1006h")
+        let cg = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .line,
+                                      wheelCount: 1, wheel1: 1, wheel2: 0, wheel3: 0))
+        cg.location = CGPoint(x: 10, y: 10)
+        let wheel = try #require(NSEvent(cgEvent: cg))
+
+        view.scrollWheel(with: wheel)
+
+        let replies = view.recordedReplies
+        #expect(!replies.isEmpty)
+        #expect(replies.allSatisfy { String(decoding: $0, as: UTF8.self).hasPrefix("\(esc)[<64;") })
+        #expect(delegate.sent.isEmpty)
+    }
 }
 #endif

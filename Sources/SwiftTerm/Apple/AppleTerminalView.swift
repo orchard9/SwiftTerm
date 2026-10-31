@@ -4737,8 +4737,10 @@ extension TerminalView {
         sendPointerInput(bytes)
     }
 
-    /// Delivers the bytes for the user's pointer input - mouse reports and
-    /// semantic prompt clicks - that the view encoded under the terminal lock.
+    /// Delivers the bytes for the user's deliberate pointer input - button
+    /// presses, releases and drags, and semantic prompt clicks - that the view
+    /// encoded under the terminal lock. Hover motion and wheel reports are not
+    /// deliberate input and go out through the terminal's reply path instead.
     /// Call it after releasing the lock. They are user input, so they go to
     /// ``TerminalViewDelegate/send(source:data:)`` like typing, never through
     /// the `Terminal` delegate method `send(source:data:)`, which carries the

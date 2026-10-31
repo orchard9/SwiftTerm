@@ -156,9 +156,9 @@ individual cell widths.
 Each row also copies its paragraph's `bidiState`; every row of a soft-wrapped
 run carries the state of the run's first row. A mid-paragraph mode change does
 not replace that state: soft-wrapped continuations inherit it. A row that a line
-feed, scroll or erase starts takes the current terminal modes, and so do the
-rows that still soft-wrap from it; a row reached only by cursor positioning keeps
-the state it already had. Do not substitute global BiDi settings or assume
+feed or scroll starts takes the current terminal modes, and so do the rows that
+still soft-wrap from it; a row reached only by cursor positioning keeps the state
+it already had. Do not substitute global BiDi settings or assume
 logical cell order is the rendered order.
 
 Synchronized output does not prevent a content copy: the copied state can

@@ -1915,7 +1915,13 @@ extension TerminalView {
         var didResize = false
         withTerminal { terminal in
             if newCols != terminal.cols || newRows != terminal.rows {
-                selection.active = false
+                // The selection is kept in buffer coordinates, and a
+                // rows-only resize does not reflow lines, so it stays
+                // valid (an iOS keyboard rising must not drop a touch
+                // selection). A column change reflows and drops it.
+                if newCols != terminal.cols {
+                    selection.active = false
+                }
                 terminal.resize(
                     cols: newCols,
                     rows: newRows,

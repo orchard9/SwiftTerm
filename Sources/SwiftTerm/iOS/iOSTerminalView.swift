@@ -1379,6 +1379,22 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
                 requestDisplay()
                 break
             }
+            if touchSelectionPending {
+                // Start a character selection where the finger first
+                // touched, not where the pan was recognized.
+                let first = CGPoint (
+                    x: gestureRecognizer.location (in: self).x - gestureRecognizer.translation (in: self).x,
+                    y: gestureRecognizer.location (in: self).y - gestureRecognizer.translation (in: self).y)
+                let start = calculateTapHit(point: first).grid
+                withTerminal { _ in
+                    selection.setSelection(start: start, end: start)
+                    selection.selectionMode = .character
+                    selection.pivot = selection.start
+                    selection.pivotExtend(bufferPosition: hit)
+                }
+                requestDisplay()
+                break
+            }
             panStart = hit
         case .changed:
             let absoluteY = gestureRecognizer.location (in: self).y - contentOffset.y
@@ -1409,12 +1425,14 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             }
         case .ended:
             stopSelectionTimer()
+            endTouchSelection()
             if withTerminal({ _ in selection.active }) {
                 showContextMenu (forRegion: makeContextMenuRegionForSelection(), pos: calculateTapHit(gesture: gestureRecognizer).grid)
             }
             break
         case .cancelled:
             stopSelectionTimer()
+            endTouchSelection()
             withTerminal { _ in selection.active = false }
         default:
             break
@@ -1453,11 +1471,36 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     }
     
     func disableSelectionPanGesture() {
+        endTouchSelection()
         guard let gesture = panSelectionGesture else {
             return
         }
         removeGestureRecognizer(gesture)
         panSelectionGesture = nil
+    }
+
+    /// Set by `beginTouchSelection` until the next selection drag ends;
+    /// a host's own one-finger gestures should yield to it.
+    public private(set) var touchSelectionPending = false
+
+    /// Added by the orchard9 fork. Makes the next one-finger drag select
+    /// text (character by character, from its first point) instead of
+    /// scrolling or reporting the mouse; the mode ends when that drag ends,
+    /// and the Copy menu is then shown for the selection.
+    public func beginTouchSelection () {
+        enableSelectionPanGesture()
+        touchSelectionPending = true
+        panGestureRecognizer.isEnabled = false
+        panMouseGesture?.isEnabled = false
+    }
+
+    func endTouchSelection () {
+        guard touchSelectionPending else {
+            return
+        }
+        touchSelectionPending = false
+        panGestureRecognizer.isEnabled = true
+        panMouseGesture?.isEnabled = true
     }
     
     func setupGestures ()
@@ -3711,7 +3754,9 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             // `setNeedsDisplay` alone repaints the previous frame.
             self.invalidateTerminalContents()
 
-            if !self.withTerminal({ _ in self.selection.active }) {
+            // A pending `beginTouchSelection` has no selection yet; keep
+            // its gesture armed until the drag it waits for.
+            if !self.touchSelectionPending && !self.withTerminal({ _ in self.selection.active }) {
                 UIMenuController.shared.hideMenu()
                 self.withTerminal { _ in self.selection.selectNone() }
                 self.disableSelectionPanGesture()
